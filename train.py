@@ -8,6 +8,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
+from model.warmup import GradualWarmupScheduler
 
 from datetime import datetime
 from tqdm import tqdm
@@ -18,13 +19,22 @@ from data import AudioDataset, MelSpectrogramFixed
 from benchmark import compute_rtf
 from utils import ConfigWrapper, show_message, str2bool
 
+os.environ["NCCL_P2P_DISABLE"] = "1"
 
 def run_training(rank, config, args):
+    seed = 1234
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    np.random.seed(seed)
+
     if args.n_gpus > 1:
         init_distributed(rank, args.n_gpus, config.dist_config)
         torch.cuda.set_device(f'cuda:{rank}')
 
     show_message('Initializing logger...', verbose=args.verbose, rank=rank)
+    if "warm_up" not in config.training_config:
+        config.training_config.warm_up = False
+    config.training_config.logdir = f"{config.training_config.logdir}-ss{config.training_config.step_sampler}-noise{config.training_config.noise_scale}-tignore{config.training_config.t_ignore}-lr{config.training_config.lr}-bsz{config.training_config.batch_size}-warmup{config.training_config.warm_up}"
     logger = Logger(config, rank=rank)
     
     show_message('Initializing model...', verbose=args.verbose, rank=rank)
@@ -48,6 +58,9 @@ def run_training(rank, config, args):
         step_size=config.training_config.scheduler_step_size,
         gamma=config.training_config.scheduler_gamma
     )
+    if config.training_config.warm_up:
+        scheduler = GradualWarmupScheduler(optimizer=optimizer, multiplier=10, total_epoch=10, after_scheduler=scheduler)
+
     if config.training_config.use_fp16:
         scaler = torch.cuda.amp.GradScaler()
 
@@ -59,21 +72,32 @@ def run_training(rank, config, args):
         sampler=train_sampler, drop_last=True
     )
 
+    show_message("Loading data loaders finished!", rank=rank)
+
     if rank == 0:
         test_dataset = AudioDataset(config, training=False)
         test_dataloader = DataLoader(test_dataset, batch_size=1)
         test_batch = test_dataset.sample_test_batch(
             config.training_config.n_samples_to_test
         )
+    show_message("Loading test batch finished!", rank=rank)
+
 
     if config.training_config.continue_training:
         show_message('Loading latest checkpoint to continue training...', verbose=args.verbose, rank=rank)
         model, optimizer, iteration = logger.load_latest_checkpoint(model, optimizer)
         epoch_size = len(train_dataset) // config.training_config.batch_size
+        print(epoch_size)
         epoch_start = iteration // epoch_size
+        if config.training_config.continue_lr != 0:
+            for params in optimizer.param_groups:                      
+                params['lr'] = config.training_config.continue_lr
     else:
         iteration = 0
-        epoch_start = 0
+        epoch_start = 1
+    
+        
+    
 
     # Log ground truth test batch
     if rank == 0:
@@ -88,40 +112,55 @@ def run_training(rank, config, args):
         }
         logger.log_specs(0, specs)
 
+    show_message("Logging finished!", rank=rank)
+
+
     if args.n_gpus > 1:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank], output_device=rank)
         show_message(f'INITIALIZATION IS DONE ON RANK {rank}.')
 
     show_message('Start training...', verbose=args.verbose, rank=rank)
     try:
-        for epoch in range(epoch_start, config.training_config.n_epoch):
+        for epoch in range(epoch_start, config.training_config.n_epoch+1):
             # Training step
             model.train()
-            (model if args.n_gpus == 1 else model.module).set_new_noise_schedule(
-                init=torch.linspace,
-                init_kwargs={
-                    'steps': config.training_config.training_noise_schedule.n_iter,
-                    'start': config.training_config.training_noise_schedule.betas_range[0],
-                    'end': config.training_config.training_noise_schedule.betas_range[1]
-                }
-            )
+            # Reflow Process does not need this:
+            # (model if args.n_gpus == 1 else model.module).set_new_noise_schedule(
+            #     init=torch.linspace,
+            #     init_kwargs={
+            #         'steps': config.training_config.training_noise_schedule.n_iter,
+            #         'start': config.training_config.training_noise_schedule.betas_range[0],
+            #         'end': config.training_config.training_noise_schedule.betas_range[1]
+            #     }
+            # )
+
             for batch in (
-                tqdm(train_dataloader, leave=False) \
+                tqdm(train_dataloader, leave=False, desc=f"Epoch {epoch}") \
                 if args.verbose and rank == 0 else train_dataloader
             ):
                 model.zero_grad()
 
-                batch = batch.cuda()
-                mels = mel_fn(batch)
+                batch = batch.cuda() # (channels, samples)
+                mels = mel_fn(batch) # (channels, n_mels, time)
+                batch += torch.randn_like(batch)*config.training_config.noise_scale
+
                 
                 if config.training_config.use_fp16:
                     with torch.cuda.amp.autocast():
-                        loss = (model if args.n_gpus == 1 else model.module).compute_loss(mels, batch)
+                        loss = (model if args.n_gpus == 1 else model.module).compute_loss_reflow(mels, batch)
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
                 else:
-                    loss = (model if args.n_gpus == 1 else model.module).compute_loss(mels, batch)
+                    loss = (model if args.n_gpus == 1 else model.module).compute_loss_reflow(mels, batch)
                     loss.backward()
+
+                # grad_list = np.array([p.grad.norm().detach().cpu().numpy() for p in model.parameters()])
+                # print(grad_list)
+                # from matplotlib import pyplot as plt
+                # fig, ax = plt.subplots()
+                # ax.plot(grad_list)
+                # fig.savefig(f"{config.training_config.logdir}/{epoch}.png")
+                # plt.close()
                 
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     parameters=model.parameters(),
@@ -145,14 +184,15 @@ def run_training(rank, config, args):
             # Test step after epoch on rank==0 GPU
             if epoch % config.training_config.test_interval == 0 and rank == 0:
                 model.eval()
-                (model if args.n_gpus == 1 else model.module).set_new_noise_schedule(
-                    init=torch.linspace,
-                    init_kwargs={
-                        'steps': config.training_config.test_noise_schedule.n_iter,
-                        'start': config.training_config.test_noise_schedule.betas_range[0],
-                        'end': config.training_config.test_noise_schedule.betas_range[1]
-                    }
-                )
+                # Reflow Process does not need this:
+                # (model if args.n_gpus == 1 else model.module).set_new_noise_schedule(
+                #     init=torch.linspace,
+                #     init_kwargs={
+                #         'steps': config.training_config.test_noise_schedule.n_iter,
+                #         'start': config.training_config.test_noise_schedule.betas_range[0],
+                #         'end': config.training_config.test_noise_schedule.betas_range[1]
+                #     }
+                # )
                 with torch.no_grad():
                     # Calculate test set loss
                     test_loss = 0
@@ -160,9 +200,9 @@ def run_training(rank, config, args):
                         tqdm(test_dataloader) \
                         if args.verbose and rank == 0 else test_dataloader
                     ):
-                        batch = batch.cuda()
+                        batch = batch.cuda() # Actually this is length-variant, i.e., different batch has differnet length
                         mels = mel_fn(batch)
-                        test_loss_ = (model if args.n_gpus == 1 else model.module).compute_loss(mels, batch)
+                        test_loss_ = (model if args.n_gpus == 1 else model.module).compute_loss_reflow(mels, batch, train_mode=False)
                         test_loss += test_loss_
                     test_loss /= (i + 1)
                     loss_stats = {'total_loss': test_loss.item()}
@@ -179,7 +219,7 @@ def run_training(rank, config, args):
                         test_mel = mel_fn(test_sample.cuda())
 
                         start = datetime.now()
-                        y_0_hat = (model if args.n_gpus == 1 else model.module).forward(
+                        y_0_hat = (model if args.n_gpus == 1 else model.module).forward_reflow(
                             test_mel, store_intermediate_states=False
                         )
                         y_0_hat_mel = mel_fn(y_0_hat)
@@ -191,6 +231,8 @@ def run_training(rank, config, args):
                         
                         test_l1_loss += torch.nn.L1Loss()(y_0_hat, test_sample).item()
                         test_l1_spec_loss += torch.nn.L1Loss()(y_0_hat_mel, test_mel).item()
+                        # test_l1_loss += torch.nn.MSELoss()(y_0_hat, test_sample).item()
+                        # test_l1_spec_loss += torch.nn.MSELoss()(y_0_hat_mel, test_mel).item()
 
                         audios[f'audio_{index}/predicted'] = y_0_hat.cpu().squeeze()
                         specs[f'mel_{index}/predicted'] = y_0_hat_mel.cpu().squeeze()
@@ -212,8 +254,12 @@ def run_training(rank, config, args):
                     model if args.n_gpus == 1 else model.module,
                     optimizer
                 )
-            if epoch % (epoch//10 + 1) == 0:
+            logger.log_lr(epoch=epoch,lr=optimizer.param_groups[0]["lr"])
+            if config.training_config.warm_up and epoch < 10:
                 scheduler.step()
+            elif epoch % (epoch//10 + 1) == 0:
+                scheduler.step()
+            
     except KeyboardInterrupt:
         print('KeyboardInterrupt: training has been stopped.')
         cleanup()
@@ -223,7 +269,8 @@ def run_training(rank, config, args):
 def run_distributed(fn, config, args):
     try:
         mp.spawn(fn, args=(config, args), nprocs=args.n_gpus, join=True)
-    except:
+    except Exception as e:
+        print(e)
         cleanup()
 
 
@@ -245,9 +292,6 @@ def cleanup():
 
 
 if __name__ == '__main__':
-    torch.manual_seed(1234)
-    np.random.seed(1234)
-
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', required=True, type=str, help='configuration file')
     parser.add_argument(

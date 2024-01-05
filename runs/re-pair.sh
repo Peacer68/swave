@@ -1,0 +1,1 @@
+python generate_match_data.py # the working directory is swave/ instead of swave/runs/

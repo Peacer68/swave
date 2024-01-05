@@ -1,0 +1,50 @@
+{
+    "model_config": {
+        "factors": [5, 5, 3, 2, 2],
+        "upsampling_preconv_out_channels": 768,
+        "upsampling_out_channels": [512, 512, 256, 128, 128],
+        "upsampling_dilations": [
+            [1, 2, 1, 2],
+            [1, 2, 1, 2],
+            [1, 2, 4, 8],
+            [1, 2, 4, 8],
+            [1, 2, 4, 8]
+        ],
+        "downsampling_preconv_out_channels": 32,
+        "downsampling_out_channels": [128, 128, 256, 512],
+        "downsampling_dilations": [
+            [1, 2, 4], [1, 2, 4], [1, 2, 4], [1, 2, 4]
+        ]
+    },
+    "data_config": {
+        "sample_rate": 22050,
+        "n_fft": 1024,
+        "win_length": 1024,
+        "hop_length": 300,
+        "f_min": 80.0,
+        "f_max": 8000,
+        "n_mels": 80
+    },
+    "training_config": {
+        "train_filelist_path": "filelists/train.txt",
+        "test_filelist_path": "filelists/test.txt",
+        "grad_clip_threshold": 1,
+        "scheduler_step_size": 1,
+        "scheduler_gamma": 0.9,
+        "n_epoch": 20000,
+        "n_samples_to_test": 100,
+        "wav_save_dir": "YOUR_SAVE_DIR_PATH",
+        "test_interval": 10,
+        "use_fp16": true,
+
+        "training_noise_schedule": {
+            "n_iter": 1000,
+            "betas_range": [1e-6, 0.01]
+        },
+        "test_noise_schedule": {
+            "n_iter": 10,
+            "betas_range": [1e-6, 0.01]
+        }
+    },
+    "resume_checkpoint": "YOUR_CKPT_PATH"
+}

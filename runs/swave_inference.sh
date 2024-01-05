@@ -1,0 +1,1 @@
+python swave_inference.py # the working directory is swave/ instead of swave/runs/
