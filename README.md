@@ -2,7 +2,7 @@
 
 > Official Implementation of SWave. Submission to ICME 2024, under review.
 
-| ![workflow.png](.\misc\workflow.png) |
+| ![workflow.png](misc\workflow.png) |
 | :----------------------------------------------------------- |
 | *Training Workflow of SWave. During rectification, we randomly sample some noises and speeches to construct the data pairs $(X_0,X_1)$, and then apply the operator $K$ times to straighten the generation path from noise to speech. During distillation, we utilize the data pairs constructed by the $F$-step VFE in the $K$-th operator to distill an $N$-step VFE. Finally, we fine-tune the $N$-step VFE with the ground truth and obtain $N$-step SWave. $F$ is generally set to 1,000, and $N\ll F$.* |
 
