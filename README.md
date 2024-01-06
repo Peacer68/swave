@@ -2,23 +2,9 @@
 
 > Official Implementation of SWave. Submission to ICME 2024, under review.
 
-| ![workflow.png](misc/workflow.png) |
+| ![workflow.png](misc/workflow.png)                           |
 | :----------------------------------------------------------- |
 | *Training Workflow of SWave. During rectification, we randomly sample some noises and speeches to construct the data pairs $(X_0,X_1)$, and then apply the operator $K$ times to straighten the generation path from noise to speech. During distillation, we utilize the data pairs constructed by the $F$-step VFE in the $K$-th operator to distill an $N$-step VFE. Finally, we fine-tune the $N$-step VFE with the ground truth and obtain $N$-step SWave. $F$ is generally set to 1,000, and $N\ll F$.* |
-
-### Preparation
-
-[LJSpeech Dataset](https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2)
-
-Some pretrained checkpoints for test:
-
-|      |      |
-| ---- | ---- |
-|      |      |
-|      |      |
-|      |      |
-
-
 
 ### Stage 1: Rectification
 
@@ -72,7 +58,11 @@ You can modify the `configs/inference.json` to set the number of generation step
 bash runs/swave_inference.sh
 ```
 
+### Links
 
+[LJSpeech Dataset](https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2)
+
+Some pretrained checkpoints for test: [2-step SWave](https://drive.google.com/file/d/1yj8xSKtrIS3cfvNhnC7Y3f7vYIFNAxYQ/view?usp=drive_link), [10-step SWave](https://drive.google.com/file/d/13X4TyO5VY3Gu6pC93DOctI5YJNaza_Pj/view?usp=sharing).
 
 
 
