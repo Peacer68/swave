@@ -1,6 +1,6 @@
 ## SWave: Improving Vocoder Efficiency by Straightening the Waveform Generation Path
 
-> Official Implementation of SWave. Submission to ICME 2024, under review.
+> Official Implementation of *[SWave: Improving Vocoder Efficiency by Straightening the Waveform Generation Path](https://link.springer.com/chapter/10.1007/978-3-031-78172-8_26)* (ICPR'24)
 
 | ![workflow.png](misc/workflow.png)                           |
 | :----------------------------------------------------------- |
@@ -62,7 +62,21 @@ bash runs/swave_inference.sh
 
 [LJSpeech Dataset](https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2)
 
+
 Some pretrained checkpoints for test: [2-step SWave](https://drive.google.com/file/d/1yj8xSKtrIS3cfvNhnC7Y3f7vYIFNAxYQ/view?usp=drive_link), [10-step SWave](https://drive.google.com/file/d/13X4TyO5VY3Gu6pC93DOctI5YJNaza_Pj/view?usp=sharing).
+
+### Citation
+Please add the citation if our paper or code helps you.
+```tex
+@inproceedings{liu2025swave,
+  title={SWave: Improving Vocoder Efficiency by Straightening the Waveform Generation Path},
+  author={Liu, Pan and Zhou, Jianping and Tian, Xiaohua and Lin, Zhouhan},
+  booktitle={International Conference on Pattern Recognition},
+  pages={397--408},
+  year={2025},
+  organization={Springer}
+}
+```
 
 
 
